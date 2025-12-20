@@ -29,6 +29,9 @@ function Chat() {
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     };
+    //xu ly realtime cho sendChat o nguoi dung va room
+    const selectedUserRef = useRef(null);
+    const selectedRoomRef = useRef(null);
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
     useEffect(() => {
@@ -44,27 +47,54 @@ function Chat() {
                 // Khi nhận login thành công, yêu cầu danh sách people/rooms
                 const onAuthSuccess = (data) => {
                     console.log('Login/RE_LOGIN response:', data);
-                    if (data && (data.status === 'success' || data.event === 'RE_LOGIN' || data.status === 'ok')) {
+
+                    // 1. Định nghĩa thế nào là "Đã đăng nhập từ trước" (Server báo lỗi nhưng thực ra là OK)
+                    const isAlreadyLoggedIn = data.status === 'error' && data.mes === 'You are already logged in';
+
+                    // 2. Định nghĩa thành công thông thường
+                    const isSuccess = data.status === 'success' || data.status === 'ok';
+
+                    // 3. Logic mới: Chấp nhận cả Success, RE_LOGIN, và Already Logged In
+                    if (data && (isSuccess || data.event === 'RE_LOGIN' || isAlreadyLoggedIn)) {
                         setIsAuthenticated(true);
+
+                        if (isAlreadyLoggedIn) {
+                            console.log('ℹ️ Server báo user đã login, bỏ qua lỗi và tiếp tục tải dữ liệu.');
+                        }
+
                         try {
-                            websocketService.send('GET_PEOPLE_CHAT_MES', { name: currentUser.name || currentUser.user || currentUser.email, page: 1 });
+                            websocketService.send('GET_USER_LIST', {
+                                name: currentUser.name || currentUser.user || currentUser.email,
+                                page: 1
+                            });
                         } catch (err) {
-                            console.warn('Không thể gửi GET_PEOPLE_CHAT_MES:', err);
+                            console.warn('Không thể gửi GET_USER_LIST:', err);
                         }
                     } else {
+                        // Chỉ rơi vào đây nếu lỗi thật sự (sai pass, v.v...)
                         console.warn('Auth response indicates failure:', data);
                     }
                 };
 
                 const onAuthError = (data) => {
                     console.log('Auth error response:', data);
-                    if (data && data.status === 'error') {
-                        console.warn('Auth failed:', data.mes);
-                        if (data.event === 'RE_LOGIN') {
-                            console.log('RE_LOGIN code expired or invalid, removing from localStorage');
-                            const updatedUser = { ...currentUser, reLoginCode: null };
-                            localStorage.setItem('currentUser', JSON.stringify(updatedUser));
+                    // if (data && data.status === 'error') {
+                    //     console.warn('Auth failed:', data.mes);
+                    //     if (data.event === 'RE_LOGIN') {
+                    //         console.log('RE_LOGIN code expired or invalid, removing from localStorage');
+                    //         const updatedUser = { ...currentUser, reLoginCode: null };
+                    //         localStorage.setItem('currentUser', JSON.stringify(updatedUser));
+                    //     }
+                    // }
+                    if (data && data.mes === 'User not Login') {
+                        console.log('🔄 Socket vừa kết nối lại, đang tự động đăng nhập...');
+                        if (currentUser && currentUser.password) {
+                            websocketService.send('LOGIN', {
+                                user: currentUser.name || currentUser.user || currentUser.email,
+                                pass: currentUser.password
+                            });
                         }
+                        return;
                     }
                 };
 
@@ -154,8 +184,67 @@ function Chat() {
                 });
 
                 websocketService.on('SEND_CHAT', (data) => {
-                    if (data.data) {
-                        setMessages(prev => [...prev, data.data]);
+                    // if (data.data) {
+                    //     setMessages(prev => [...prev, data.data]);
+                    // }
+                    const msg = data.data;
+                    if (!msg) return;
+
+                    // Lấy user/room đang mở từ Ref
+                    const activeUser = selectedUserRef.current;
+                    const activeRoom = selectedRoomRef.current;
+
+                    // Lấy tên mình
+                    const myName = currentUser.name || currentUser.user || currentUser.email;
+
+                    // --- CHUẨN HÓA DỮ LIỆU ---
+                    // Server của bạn dùng 'name' để chỉ người gửi, nhưng code cũ dùng 'from'.
+                    // Ta tạo biến sender để thống nhất.
+                    const sender = msg.from || msg.name; // <--- SỬA QUAN TRỌNG TẠI ĐÂY
+                    const receiver = msg.to;
+
+                    console.log('📨 Nhận tin:', msg);
+                    console.log(`🔍 So sánh: Sender[${sender}] vs Active[${activeUser}]`);
+
+                    // Hàm làm sạch chuỗi để so sánh chính xác (bỏ khoảng trắng, chữ hoa thường)
+                    const clean = (str) => String(str || '').trim().toLowerCase();
+
+                    let shouldShow = false;
+
+                    if (activeUser) {
+                        // --- TRƯỜNG HỢP CHAT 1-1 ---
+
+                        // 1. Tin nhắn từ người mình đang chat gửi tới mình
+                        // (Ví dụ: Đang chat với Thungan, nhận tin từ name='thungan')
+                        const isFromThem = clean(sender) === clean(activeUser);
+
+                        // 2. Tin nhắn do chính mình gửi cho họ (Server Echo về)
+                        // (Ví dụ: Mình là 22130180, gửi cho to='thungan')
+                        const isFromMe = clean(sender) === clean(myName) && clean(receiver) === clean(activeUser);
+
+                        if (isFromThem || isFromMe) {
+                            shouldShow = true;
+                        }
+                    }
+                    else if (activeRoom) {
+                        // --- TRƯỜNG HỢP CHAT ROOM ---
+                        const roomName = activeRoom.name || activeRoom;
+                        // Kiểm tra tin nhắn có gửi vào đúng phòng này không
+                        if (clean(receiver) === clean(roomName)) {
+                            shouldShow = true;
+                        }
+                    }
+
+                    if (shouldShow) {
+                        console.log('✅ Khớp! Cập nhật UI.');
+                        setMessages(prev => {
+                            // Chống trùng lặp đơn giản (nếu msg có id)
+                            if (msg.id && prev.some(m => m.id === msg.id)) return prev;
+                            return [...prev, msg];
+                        });
+                        scrollToBottom();
+                    } else {
+                        console.log('❌ Không khớp cửa sổ chat.');
                     }
                 });
 
@@ -212,14 +301,16 @@ function Chat() {
         setupWebSocket();
 
         return () => {
-            websocketService.disconnect();
+            // websocketService.disconnect();
         };
     }, []);
 
     const handleSelectUser = (person) => {
         const personName = typeof person === 'string' ? person : person.name || person.to || person;
         setSelectedUser(personName);
+        selectedUserRef.current = personName; //cap nhat ref cho nguoi dung
         setSelectedRoom(null);
+        selectedRoomRef.current = null;
         setMessages([]);
         
         // For direct messages, request people chat history
@@ -269,11 +360,14 @@ function Chat() {
         e.preventDefault();
         
         if (newMessage.trim()) {
+            // Lấy tên người gửi
+            const senderName = currentUser.name || currentUser.user || currentUser.email;
             if (selectedUser) {
                 websocketService.send('SEND_CHAT', {
                     type: 'people',
                     to: selectedUser,
-                    mes: newMessage
+                    mes: newMessage,
+                    name: senderName
                 });
             } else if (selectedRoom) {
                 const roomName = selectedRoom.name || selectedRoom;
@@ -286,7 +380,8 @@ function Chat() {
                 websocketService.send('SEND_CHAT', {
                     type: 'room',
                     to: roomName,
-                    mes: newMessage
+                    mes: newMessage,
+                    name: senderName
                 });
             }
             setNewMessage('');
