@@ -5,6 +5,7 @@ class WebSocketService {
         this.listeners = {};
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 5;
+
         this.attemptReconnect = this.attemptReconnect.bind(this);
         this.connect = this.connect.bind(this);
         // --------------------------------
@@ -35,6 +36,8 @@ class WebSocketService {
 
             this.ws.onclose = () => {
                 console.log('Kết nối đã đóng. Đang gọi reconnect...');
+                // Lúc này 'this' chính là WebSocketService class
+                // --- THÊM ĐOẠN NÀY: Báo ra ngoài là đã CLOSE ---
                 if (this.listeners['CLOSE']) {
                     this.listeners['CLOSE'].forEach(cb => cb());
                 }
@@ -57,13 +60,16 @@ class WebSocketService {
             let eventKey = null;
             let normalized = raw;
 
+            // Logic chuẩn hóa message
             if (raw && raw.action === 'onchat' && raw.data && typeof raw.data === 'object' && 'event' in raw.data) {
                 eventKey = raw.data.event;
+                // Flatten payload: prefer raw.data.data if present, otherwise use raw.data
+                const payload = (raw.data && typeof raw.data === 'object') ? (raw.data.data ?? raw.data) : raw.data;
                 normalized = {
                     event: eventKey,
-                    status: raw.status || raw.data.status,
-                    mes: raw.mes || raw.data.mes,
-                    data: raw.data.data
+                    status: raw.status || payload?.status || raw.data?.status,
+                    mes: raw.mes || payload?.mes || raw.data?.mes,
+                    data: payload?.data ?? payload
                 };
             } else if (raw && (raw.event || raw.action)) {
                 eventKey = raw.event || raw.action;
@@ -84,6 +90,7 @@ class WebSocketService {
     }
 
     attemptReconnect() {
+        // Hàm này PHẢI nằm trong class, ngang cấp với connect()
         if (this.reconnectAttempts < this.maxReconnectAttempts) {
             this.reconnectAttempts++;
             console.log(`Thử kết nối lại... (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
