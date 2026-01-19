@@ -8,50 +8,61 @@ const useAuth = (currentUser) => {
     const dispatch = useDispatch();
 
     useEffect(() => {
-        if (!currentUser || !currentUser.password) return;
+        const username = currentUser?.name || currentUser?.user || currentUser?.email;
+        const password = currentUser?.password;
+        const reLoginCode = currentUser?.reLoginCode;
+        if (!username || (!password && !reLoginCode)) return;
 
         const handleAuthResponse = (data) => {
-            const isSuccess = data.status === 'success';
-            const isAlreadyLoggedIn = data.mes === 'You are already logged in';
-            const isReLogin = data.event === 'RE_LOGIN';
+            const isSuccess = data?.status === 'success';
+            const isAlreadyLoggedIn = data?.mes === 'You are already logged in';
+            const isReLoginEvent = data?.event === 'RE_LOGIN';
 
-            if (data && (isSuccess || isReLogin || isAlreadyLoggedIn)) {
-                console.log("✅ Đăng nhập/Xác thực thành công!");
-                dispatch(setIsAuthenticated(true));
+            if (isSuccess || isReLoginEvent || isAlreadyLoggedIn) {
+                console.log('Đăng nhập/Xác thực thành công!');
+                dispatch(setIsAuthenticated(true));//gửi action lưu trạng thái đn
             } else {
-                console.warn('⚠️ Đăng nhập thất bại:', data);
+                console.warn(' Đăng nhập thất bại:', data);
             }
         };
 
-        const performLogin = () => {
+        const performAuth = () => {
             if (websocketService.ws?.readyState === WebSocket.OPEN) {
-                console.log("🔄 Đang gửi gói tin LOGIN (Authentication)...");
-                websocketService.send('LOGIN', {
-                    user: currentUser.name || currentUser.user || currentUser.email,
-                    pass: currentUser.password,
-                });
+                if (reLoginCode) {
+                    console.log('🔄 Gửi gói RE_LOGIN bằng code...');
+                    websocketService.send('RE_LOGIN', {
+                        user: username,
+                        code: reLoginCode,
+                    });
+                } else {
+                    console.log('🔄 Gửi gói LOGIN bằng mật khẩu...');
+                    websocketService.send('LOGIN', {
+                        user: username,
+                        pass: password,
+                    });
+                }
             } else {
                 websocketService.connect();
             }
         };
 
-
+        //đk sk
         websocketService.on('LOGIN', handleAuthResponse);
         websocketService.on('RE_LOGIN', handleAuthResponse);
+        websocketService.on('OPEN', performAuth);//khi sk mở tự động gọi
 
-        websocketService.on('OPEN', performLogin);
-
+        // Thử ngay nếu socket đã mở sẵn
         if (websocketService.ws?.readyState === WebSocket.OPEN) {
-            performLogin();
+            performAuth();
         }
 
+        // Cleanup
         return () => {
             websocketService.off('LOGIN', handleAuthResponse);
             websocketService.off('RE_LOGIN', handleAuthResponse);
-            websocketService.off('OPEN', performLogin);
+            websocketService.off('OPEN', performAuth);
         };
-
-    }, [currentUser?.user, currentUser?.password, dispatch]);
+    }, [currentUser?.user, currentUser?.name, currentUser?.email, currentUser?.password, currentUser?.reLoginCode, dispatch]);// effect phụ thuộc vào thông tin ng dùng
 };
 
 export default useAuth;
